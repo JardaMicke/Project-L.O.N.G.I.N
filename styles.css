@@ -1,0 +1,57 @@
+/* Základní styly pro UI */
+body {
+    font-family: Arial, sans-serif;
+    background-color: #f0f0f0;
+    margin: 0;
+    padding: 0;
+}
+
+.ui-container {
+    width: 400px;
+    margin: 50px auto;
+    background-color: #ffffff;
+    border: 2px solid #00ff00;
+    border-radius: 10px;
+    box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
+}
+
+.header {
+    background-color: #00ff00;
+    color: #ffffff;
+    text-align: center;
+    padding: 10px;
+    font-size: 1.2em;
+    border-bottom: 2px solid #00cc00;
+}
+
+.inner-box {
+    padding: 20px;
+}
+
+.scrollable-content {
+    height: 200px;
+    overflow-y: auto;
+    border: 1px solid #cccccc;
+    padding: 10px;
+    background-color: #f9f9f9;
+}
+
+.bottom-buttons {
+    display: flex;
+    justify-content: space-between;
+    margin-top: 20px;
+}
+
+.action-button {
+    background-color: #00ff00;
+    color: #ffffff;
+    border: none;
+    padding: 10px 20px;
+    cursor: pointer;
+    border-radius: 5px;
+    font-size: 1em;
+}
+
+.action-button:hover {
+    background-color: #00cc00;
+}

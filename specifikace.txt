@@ -1,0 +1,248 @@
+// specifikace.txt - V1
+1. Architektura: Event-Driven Microservices
+2. Hierarchický systém vzestupně od nejmenších modulů: Parts, Units, Components, Augments
+3. Augments se skládá z components, components se skládá z units, units se skládá z Parts.
+4. O komunikaci mezi moduly a jeho částmi se starají moduly connectory využívající eventBus.
+
+Funkce MMD souborů:
+Architecture.mmd: Vizualizuje celkovou architekturu Longin projektu.
+DataFlow.mmd: Znázorňuje tok dat mezi různými komponenty systému.
+ComponentRelations.mmd: Ukazuje vztahy a závislosti mezi různými moduly a komponentami.
+
+Specifikace projektu:
+Vytvoř Chrome rozšíření pro interakci s Perplexity AI s následujícími specifikacemi:
+
+Název: "Perplexity AI Assistant"
+
+Hlavní funkce:
+a) Výběr a sledování specifických elementů na webových stránkách
+b) Sběr dat z vybraných elementů
+c) Aktualizace dat v prostoru Perplexity AI
+d) Zobrazení a správa nasbíraných dat
+
+Komponenty rozšíření:
+a) Manifest (manifest.json)
+b) Background Script (background.js)
+c) Content Script (content.js)
+d) Popup (popup.html, popup.js)
+e) Styles (styles.css)
+
+Detailní funkcionalita:
+
+a) Výběr elementů:
+
+Implementuj systém highlightování elementů pod kurzorem myši
+
+Vytvoř tooltip zobrazující informace o elementu (tag, obsah)
+
+Po kliknutí na element ho ulož do lokálního úložiště
+
+b) Sběr dat:
+
+Použij MutationObserver pro sledování změn ve vybraných elementech
+
+Ukládej nová data do lokálního úložiště rozšíření
+
+c) Aktualizace dat v Perplexity AI:
+
+Implementuj funkci pro načtení elementu prostoru Perplexity AI
+
+Vytvoř mechanismus pro aktualizaci obsahu tohoto elementu
+
+d) UI rozšíření:
+
+Navrhni intuitivní rozhraní pro zobrazení vybraných elementů
+
+Umožni uživateli pojmenovat a kategorizovat elementy
+
+Poskytni přehled nasbíraných dat
+
+Implementuj funkce pro export dat
+
+Bezpečnost:
+
+Zajisti, že rozšíření má minimální potřebná oprávnění
+
+Implementuj bezpečné ukládání dat v lokálním úložišti
+
+Výkon:
+
+Optimalizuj proces highlightování a zobrazování tooltipů
+
+Zajisti efektivní ukládání a načítání dat
+
+Kompatibilita:
+
+Zajisti funkčnost na nejnovější verzi prohlížeče Chrome
+
+Otestuj kompatibilitu s různými verzemi Perplexity AI
+
+Dokumentace:
+
+Vytvoř uživatelskou příručku vysvětlující všechny funkce rozšíření
+
+Architektura minimálního core rozšíření
+1. Manifest (manifest.json)
+Definice oprávnění rozšíření
+
+Specifikace background scriptu a content scriptu
+
+Nastavení popup okna
+
+2. Popup (popup.html, popup.js)
+Jednoduché UI s tlačítkem pro zapnutí/vypnutí skeneru
+
+Textové okno pro zobrazení informací o elementu
+
+3. Content Script (content.js)
+Implementace highlighteru
+
+Získávání informací o elementech
+
+Komunikace s popup skriptem
+
+4. Background Script (background.js)
+Správa stavu rozšíření
+
+Komunikace mezi content scriptem a popup
+
+5. Styles (styles.css)
+Styly pro highlight efekt
+
+Styly pro popup UI
+
+Shrnutí obsahu souborů:
+base_modul.py – Obsahuje abstraktní třídu BaseModul, která je základní třídou pro všechny moduly.
+
+base_connector.py – Obsahuje abstraktní třídu BaseConnector, která slouží jako základ pro konektory mezi moduly.
+
+interfaces.py – Obsahuje rozhraní (interface) pro různé stupně modulů (IPart, IUnit, IComponent, IAugment).
+
+
+
+Workflow
+Spuštění rozšíření
+
+Uživatel klikne na ikonu rozšíření v Chrome
+
+Otevře se popup okno, které zůstane v popředí
+
+Aktivace skeneru
+
+Uživatel klikne na tlačítko "Zapnout skener" v popup okně
+
+Content script aktivuje funkci highlighteru
+
+Skenování elementů
+
+Při pohybu myši nad webovou stránkou se zvýrazňují HTML elementy pod kurzorem
+
+Content script sleduje pohyb myši a aplikuje highlight efekt
+
+Zobrazení informací o elementu
+
+Při zvýraznění elementu content script získá informace o jeho struktuře a obsahu
+
+Tyto informace jsou odeslány do popup skriptu
+
+Popup skript zobrazí informace v textovém okně
+
+Deaktivace highlightu
+
+Highlight efekt zmizí, jakmile kurzor opustí element
+
+Vypnutí skeneru
+
+Uživatel může vypnout skener kliknutím na tlačítko v popup okně
+
+button.xml:
+
+<div class="button-container">
+  <div class="circle"></div>
+  <div class="rectangle">
+    <span>TEXT</span>
+  </div>
+</div>
+
+button.css:
+
+.button-container {
+  display: flex;
+  align-items: center;
+}
+
+.circle {
+  width: 40px;
+  height: 40px;
+  background-color: #3a3a3a;
+  border: 3px solid #b0b0b0;
+  border-radius: 50%;
+}
+
+.rectangle {
+  width: 150px;
+  height: 40px;
+  background-color: #3a3a3a;
+  border: 3px solid #b0b0b0;
+  border-radius: 20px;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+
+.rectangle span {
+  color: #00ff00;
+  font-weight: bold;
+}
+
+
+UIbasic.xml:
+
+<div class="ui-container">
+  <div class="header">L.O.N.G.I.N.</div>
+  <div class="inner-box"></div>
+  <div class="side-buttons">
+    <div class="button"></div>
+    <div class="button"></div>
+    <div class="button"></div>
+    <div class="button"></div>
+    <div class="button"></div>
+  </div>
+</div>
+
+UIbasic.css:
+
+.ui-container {
+  position: relative;
+  width: 300px;
+  height: 300px;
+  background-color: black;
+  border: 5px solid #00ff00;
+  border-radius: 20px;
+}
+
+.header {
+  text-align: center;
+  color: #00ff00;
+  font-weight: bold;
+}
+
+.inner-box {
+  width: calc(100% - 40px);
+  height: calc(100% - 80px);
+  margin: auto;
+  margin-top: 40px;
+  background-color: black;
+  border: 3px solid #00ff00;
+}
+
+.side-buttons {
+  position: absolute;
+  right: -30px;
+}
+
+.button {
+  width: 20px;
+  height: calc(20%);
+  background-color: black;
+}

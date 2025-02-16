@@ -1,0 +1,8 @@
+{
+    "Orders": [
+        {
+            "OrderID": "UPDATECONTEXT",
+            "Description": "Aktualizuj soubor projectState. Postup je definován v instrukcích."
+        }
+    ]
+}
