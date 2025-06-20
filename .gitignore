@@ -1,0 +1,135 @@
+# Longin AI Systems .gitignore
+
+# Python specific files
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+
+# Virtual environments
+venv/
+env/
+.venv/
+ENV/
+env.bak/
+venv.bak/
+virtualenv/
+.env/
+.python-version
+
+# Node.js specific files
+node_modules/
+
+# IDE files
+.idea/
+.vscode/
+.vs/
+*.swp
+*.swo
+*~
+.project
+.pydevproject
+.settings/
+.classpath
+*.sublime-workspace
+*.sublime-project
+*.sublime-settings
+*.sublime-build
+
+# OS specific files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+
+# Log files
+*.log
+logs/
+log/
+logging/
+
+# Model files and data
+*.pkl
+*.joblib
+*.h5
+*.model
+*.pt
+*.pth
+*.onnx
+*.pb
+models/
+checkpoints/
+*.weights
+*.bin
+*.tfevents.*
+*.npz
+*.npy
+
+# Configuration files with API keys
+.env
+config.ini
+*.cfg
+secrets.yaml
+secrets.yml
+credentials.json
+config.json
+settings.json
+*_key.json
+
+# Temporary files and cache
+.cache/
+.tmp/
+tmp/
+temp/
+__pycache__/
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+.hypothesis/
+.coverage.*
+coverage.xml
+*.cover
+*.py,cover
+
+# Jupyter notebook checkpoints
+.ipynb_checkpoints/
+*/.ipynb_checkpoints/*
+profile_default/
+ipython_config.py
+
+# Distribution specific files
+dist/
+build/
+*.egg-info/
+*.egg
+eggs/
+.eggs/
+develop-eggs/
+downloads/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.manifest
+*.spec
+MANIFEST
+
+# Documentation
+docs/_build/
+docs/api/
+site/
+
+# Misc
+.history/
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.
