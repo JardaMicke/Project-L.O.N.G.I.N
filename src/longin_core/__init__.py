@@ -7,3 +7,5 @@ __version__ = "0.1.0"
 
 # Public exports
 from .event_bus import LONGINEventBus
+# Storage layer exports
+from .storage import StorageManager, StorageType
