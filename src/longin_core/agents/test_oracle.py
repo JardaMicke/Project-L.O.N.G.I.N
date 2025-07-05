@@ -1,5 +1,6 @@
 import logging
 import asyncio
+import json
 from typing import Dict, Any, List, Optional
 
 
@@ -33,149 +34,122 @@ class TestOracleAgent:
         self.config = config
         self.logger = logger
         self.mcp_client = mcp_client
+        self.model = config.get("model", "tester") # Assumes a model alias 'tester' is configured
         self.logger.info("TestOracleAgent initialized.")
+
+    async def _call_llm_for_json(self, prompt: str) -> Optional[List[Dict[str, Any]]]:
+        """Helper to call an LLM and parse its JSON list response."""
+        self.logger.debug(f"Calling LLM for test generation with prompt: {prompt[:100]}...")
+        response = await self.mcp_client.handle_request(
+            tool_name="llm.generate",
+            args={"model": self.model, "prompt": prompt}
+        )
+        if not response.get("success"):
+            self.logger.error(f"LLM call failed: {response.get('error')}")
+            return None
+        
+        content = response.get("result", {}).get("text", "")
+        try:
+            # The LLM should return a JSON array of test objects
+            tests = json.loads(content)
+            if isinstance(tests, list):
+                return tests
+            self.logger.warning(f"LLM returned a non-list JSON object: {type(tests)}")
+            return None
+        except json.JSONDecodeError:
+            self.logger.error(f"Failed to decode JSON from LLM response: {content}")
+            return None
 
     async def generate_tests(self, requirements: Dict[str, Any]) -> List[Dict[str, Any]]:
         """
         Generates test specifications based on the provided requirements.
         These tests will be used to guide the implementation of code.
-
-        Args:
-            requirements (Dict[str, Any]): The requirements for which tests should be generated.
-                This typically includes the task description, context, and any constraints.
-
-        Returns:
-            List[Dict[str, Any]]: A list of test specifications, each containing test details
-                such as input, expected output, and test description.
-
-        Generuje testové specifikace na základě poskytnutých požadavků.
-        Tyto testy budou použity k vedení implementace kódu.
-
-        Argumenty:
-            requirements (Dict[str, Any]): Požadavky, pro které by měly být testy vygenerovány.
-                To obvykle zahrnuje popis úkolu, kontext a případná omezení.
-
-        Vrací:
-            List[Dict[str, Any]]: Seznam testových specifikací, každá obsahující detaily testu
-                jako vstup, očekávaný výstup a popis testu.
         """
-        self.logger.info(f"Generating tests for requirements: {requirements}")
+        self.logger.info(f"Generating tests for requirements: {requirements.get('description', 'N/A')}")
         
-        # Placeholder for actual implementation
-        self.logger.info("Test generation (placeholder).")
-        
-        # Simulated test specifications
-        return [
-            {
-                "test_id": "test_001",
-                "description": "Placeholder test description",
-                "inputs": {"param1": "value1"},
-                "expected_output": "expected result",
-                "test_type": "unit",
-                "priority": "high"
-            }
-        ]
+        prompt = f"""
+You are TestOracleAgent. Your task is to generate a comprehensive list of test specifications based on the provided requirements.
+The output must be a valid JSON array of objects. Each object should represent a single test and include keys like 'test_id', 'description', 'test_type' (e.g., 'unit', 'integration'), 'priority' ('high', 'medium', 'low'), 'inputs', and 'expected_output'.
+
+Requirements:
+{json.dumps(requirements, indent=2)}
+
+Generate the JSON array of test specifications now.
+"""
+        tests = await self._call_llm_for_json(prompt)
+        return tests or []
 
     async def update_tests(self, changes: Dict[str, Any]) -> List[Dict[str, Any]]:
         """
         Updates existing tests based on changes to requirements or implementation.
-
-        Args:
-            changes (Dict[str, Any]): The changes that require test updates.
-                This may include modified requirements, implementation changes, or test results.
-
-        Returns:
-            List[Dict[str, Any]]: The updated list of test specifications.
-
-        Aktualizuje existující testy na základě změn v požadavcích nebo implementaci.
-
-        Argumenty:
-            changes (Dict[str, Any]): Změny, které vyžadují aktualizaci testů.
-                To může zahrnovat upravené požadavky, změny implementace nebo výsledky testů.
-
-        Vrací:
-            List[Dict[str, Any]]: Aktualizovaný seznam testových specifikací.
         """
-        self.logger.info(f"Updating tests based on changes: {changes}")
+        self.logger.info(f"Updating tests based on changes: {changes.get('reason', 'N/A')}")
         
-        # Placeholder for actual implementation
-        self.logger.info("Test update (placeholder).")
-        
-        # Simulated updated test specifications
-        return [
-            {
-                "test_id": "test_001",
-                "description": "Updated placeholder test description",
-                "inputs": {"param1": "updated_value1"},
-                "expected_output": "updated expected result",
-                "test_type": "unit",
-                "priority": "high"
-            }
-        ]
+        prompt = f"""
+You are TestOracleAgent. Your task is to update the provided list of test specifications based on the given changes.
+The output must be a valid JSON array of objects representing the new, complete list of tests.
+
+Original Tests:
+{json.dumps(changes.get('original_tests', []), indent=2)}
+
+Required Changes (e.g., failed test feedback, new requirements):
+{json.dumps(changes.get('feedback', {}), indent=2)}
+
+Generate the updated JSON array of test specifications now.
+"""
+        updated_tests = await self._call_llm_for_json(prompt)
+        return updated_tests or changes.get('original_tests', [])
 
     async def validate_test_results(self, test_results: List[Dict[str, Any]]) -> Dict[str, Any]:
         """
         Validates the results of executed tests and provides feedback.
-
-        Args:
-            test_results (List[Dict[str, Any]]): The results of executed tests.
-
-        Returns:
-            Dict[str, Any]: Validation report including pass/fail status and suggestions.
-
-        Validuje výsledky provedených testů a poskytuje zpětnou vazbu.
-
-        Argumenty:
-            test_results (List[Dict[str, Any]]): Výsledky provedených testů.
-
-        Vrací:
-            Dict[str, Any]: Validační zpráva včetně stavu úspěchu/selhání a návrhů.
         """
-        self.logger.info(f"Validating test results: {len(test_results)} tests")
+        self.logger.info(f"Validating {len(test_results)} test results.")
         
-        # Placeholder for actual implementation
-        self.logger.info("Test validation (placeholder).")
-        
-        # Simulated validation report
-        return {
-            "passed": 0,
-            "failed": 0,
+        passed_count = 0
+        failed_count = 0
+        failed_tests_feedback = []
+
+        for result in test_results:
+            if result.get("status") == "passed":
+                passed_count += 1
+            else:
+                failed_count += 1
+                feedback = {
+                    "test_id": result.get("test_id"),
+                    "description": result.get("description"),
+                    "reason": result.get("error", "Test failed with no specific error message."),
+                    "actual_output": result.get("actual_output"),
+                }
+                failed_tests_feedback.append(feedback)
+
+        is_success = failed_count == 0
+        report = {
+            "success": is_success,
+            "passed": passed_count,
+            "failed": failed_count,
             "total": len(test_results),
-            "status": "placeholder",
-            "suggestions": []
+            "feedback": failed_tests_feedback if not is_success else "All tests passed successfully."
         }
+        
+        self.logger.info(f"Validation report: {passed_count} passed, {failed_count} failed.")
+        return report
 
     async def generate_edge_case_tests(self, base_tests: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """
         Generates additional tests for edge cases based on existing tests.
-
-        Args:
-            base_tests (List[Dict[str, Any]]): The base tests from which to derive edge cases.
-
-        Returns:
-            List[Dict[str, Any]]: A list of edge case test specifications.
-
-        Generuje dodatečné testy pro okrajové případy na základě existujících testů.
-
-        Argumenty:
-            base_tests (List[Dict[str, Any]]): Základní testy, ze kterých se odvozují okrajové případy.
-
-        Vrací:
-            List[Dict[str, Any]]: Seznam testových specifikací pro okrajové případy.
         """
-        self.logger.info(f"Generating edge case tests from {len(base_tests)} base tests")
+        self.logger.info(f"Generating edge case tests from {len(base_tests)} base tests.")
         
-        # Placeholder for actual implementation
-        self.logger.info("Edge case test generation (placeholder).")
-        
-        # Simulated edge case tests
-        return [
-            {
-                "test_id": "edge_001",
-                "description": "Placeholder edge case test",
-                "inputs": {"param1": "extreme_value"},
-                "expected_output": "edge case result",
-                "test_type": "edge",
-                "priority": "medium"
-            }
-        ]
+        prompt = f"""
+You are TestOracleAgent. Your task is to generate a list of edge case test specifications based on the provided base tests.
+Consider scenarios like empty inputs, invalid data types, null values, large inputs, and security vulnerabilities.
+The output must be a valid JSON array of objects, following the same format as the base tests.
+
+Base Tests:
+{json.dumps(base_tests, indent=2)}
+
+Generate the JSON array of edge case test specifications now.
+"""
+        edge_tests = await self._call_llm_for_json(prompt)
+        return edge_tests or []

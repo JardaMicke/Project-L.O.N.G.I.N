@@ -1,6 +1,11 @@
 import logging
 import asyncio
 from typing import Dict, Any, List, Optional
+from datetime import datetime, timedelta
+import uuid
+import heapq
+
+import tiktoken
 from ..storage import StorageManager
 
 
@@ -61,9 +66,36 @@ class GarbageCollectorAgent:
         Vrací:
             List[dict]: Optimalizované a spravované kontextové okno.
         """
-        self.logger.info(f"Managing context window with {len(current_context)} items (placeholder).")
-        # Placeholder for actual context management logic
-        # This would involve prioritizing, token counting, and potentially removing less relevant chunks.
+        # 1. Ensure each chunk has token size computed
+        total_tokens = 0
+        for chunk in current_context:
+            if "size_tokens" not in chunk or chunk["size_tokens"] is None:
+                chunk["size_tokens"] = self._count_tokens(chunk.get("content", ""))
+            total_tokens += chunk["size_tokens"]
+
+        self.logger.debug(f"Total tokens before GC: {total_tokens}")
+
+        # 2. Build a min-heap keyed by (priority, last_accessed) to easily pop lowest-priority
+        heap: List[tuple] = []
+        for ch in current_context:
+            # Lower priority value = more important, so heap by reverse
+            priority_key = ch.get("priority", 2)
+            last_access = ch.get("last_accessed") or datetime.utcnow()
+            heapq.heappush(heap, (priority_key, last_access, ch))
+
+        # 3. Trim if exceeds limits
+        if total_tokens > self.max_context_tokens:
+            self.logger.info(
+                f"Context window exceeds limit ({total_tokens}/{self.max_context_tokens}). "
+                "Archiving least important chunks."
+            )
+        while total_tokens > self.max_context_tokens and heap:
+            _, _, victim = heapq.heappop(heap)
+            await self._archive_chunk(victim)
+            current_context.remove(victim)
+            total_tokens -= victim["size_tokens"]
+
+        self.logger.debug(f"Total tokens after GC: {total_tokens}")
         return current_context
 
     async def archive_old_data(self, criteria: dict):
@@ -80,10 +112,20 @@ class GarbageCollectorAgent:
         Argumenty:
             criteria (dict): Kritéria pro identifikaci dat k archivaci (např. stáří, počet přístupů).
         """
-        self.logger.info(f"Archiving old data based on criteria: {criteria} (placeholder).")
-        # Placeholder for actual archiving logic
-        # This would involve querying active stores and moving data to archive stores.
-        pass
+        age_days: int = criteria.get("age_days", 30)
+        threshold_date = datetime.utcnow() - timedelta(days=age_days)
+
+        store = await self.storage_manager.select_store("log", "append_only")
+        if not store:
+            self.logger.warning("No archive store available.")
+            return
+
+        # Example criteria application – in practice we'd query persistent storage.
+        # Here we only log the action.
+        self.logger.info(
+            f"Would archive chunks older than {threshold_date.isoformat()}. "
+            "Real implementation depends on storage format."
+        )
 
     async def _emergency_cleanup(self, needed_tokens: int):
         """
@@ -93,9 +135,10 @@ class GarbageCollectorAgent:
         Args:
             needed_tokens (int): Number of tokens that need to be freed up.
 
-        Interní metoda pro nouzové vyčištění, když je kriticky překročen limit tokenů.
-        Odstraňuje chunky s nejnižší prioritou, aby uvolnila místo pro nový, důležitý obsah.
-
+        self.logger.warning(f"Emergency cleanup requested for {needed_tokens} tokens.")
+        # This is a stub; actual implementation would receive current_context
+        # and archive until freed. For now, we just log.
+        # Future hook: self.manage_context_window(...) with emergency flag.
         Argumenty:
             needed_tokens (int): Počet tokenů, které je třeba uvolnit.
         """
@@ -115,13 +158,36 @@ class GarbageCollectorAgent:
         Vrací:
             Dict[str, Any]: Slovník obsahující informace o stavu paměti.
         """
-        self.logger.info("Getting memory status (placeholder).")
-        # Placeholder for actual memory status reporting
-        return {
-            "total_tokens": 0,
-            "used_tokens": 0,
-            "available_tokens": self.max_context_tokens,
-            "usage_percentage": 0,
-            "chunks_count": 0,
-            "status": "healthy"
+        # In a full implementation, the agent would keep state of current_context.
+        # Here we assume caller passes context when needed, so we return static info.
+        status = {
+            "total_tokens": self.max_context_tokens,
+            "used_tokens": None,
+            "available_tokens": None,
+            "usage_percentage": None,
+            "chunks_count": None,
+            "status": "unknown",
         }
+        return status
+
+    # --------------------------------------------------------------------- #
+    # Helper methods
+    # --------------------------------------------------------------------- #
+
+    def _count_tokens(self, text: str) -> int:
+        """Counts tokens of a text using tiktoken cl100k_base encoding."""
+        try:
+            enc = tiktoken.get_encoding("cl100k_base")
+        except Exception:
+            enc = tiktoken.encoding_for_model("gpt-3.5-turbo")
+        return len(enc.encode(text))
+
+    async def _archive_chunk(self, chunk: Dict[str, Any]):
+        """Persists a context chunk to archive storage."""
+        store = await self.storage_manager.select_store("log", "append_only")
+        if not store:
+            self.logger.warning("No archive store available, dropping chunk.")
+            return
+        archive_id = str(uuid.uuid4())
+        await store.set(archive_id, chunk)
+        self.logger.debug(f"Archived chunk {chunk.get('chunk_id')} as {archive_id}.")

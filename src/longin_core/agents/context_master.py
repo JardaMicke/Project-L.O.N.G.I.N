@@ -1,7 +1,11 @@
+
 import logging
 import asyncio
+import uuid
 from typing import Dict, Any, List, Optional
-from ..storage import StorageManager
+
+import tiktoken
+from ..storage import StorageManager, StorageType
 
 
 class ContextMasterAgent:
@@ -41,13 +45,14 @@ class ContextMasterAgent:
         self.chunk_size = config.get("chunk_size", 128)
         self.logger.info("ContextMasterAgent initialized.")
 
-    async def gather_context(self, task_description: str) -> Dict[str, Any]:
+    async def gather_context(self, task_description: str, top_k: int = 5) -> Dict[str, Any]:
         """
         Gathers relevant context based on the given task description.
         Uses vector similarity search to find the most relevant chunks of information.
 
         Args:
             task_description (str): Description of the task for which context is needed.
+            top_k (int): The number of top similar chunks to retrieve.
 
         Returns:
             Dict[str, Any]: The gathered context information.
@@ -57,10 +62,24 @@ class ContextMasterAgent:
 
         Argumenty:
             task_description (str): Popis úkolu, pro který je kontext potřeba.
+            top_k (int): Počet nejvíce podobných chunků k načtení.
 
         Vrací:
             Dict[str, Any]: Shromážděné kontextové informace.
         """
+
+        self.logger.info(f"Gathering context for task: '{task_description[:50]}...'")
+
+        query_embedding = await self.generate_embedding(task_description)
+        if not query_embedding:
+            return {"success": False, "error": "Failed to generate query embedding."}
+
+        vector_store = self.storage_manager.get_store(StorageType.POSTGRES_VECTOR)
+        if not vector_store:
+            return {"success": False, "error": "Vector store not available."}
+
+        similar_chunks = await vector_store.search_similar(vector=query_embedding, top_k=top_k)
+
         self.logger.info(f"Gathering context for task: {task_description}")
         
         # ------------------------------------------------------------------
@@ -134,12 +153,18 @@ class ContextMasterAgent:
                 continue
 
         status = "ok" if all_chunks else "no_relevant_files"
+
         return {
+            "success": True,
             "task": task_description,
+
+            "context_chunks": similar_chunks,
+            "sources": list(set(chunk.get("metadata", {}).get("source") for chunk in similar_chunks if chunk.get("metadata"))),
             "context_chunks": all_chunks,
             "sources": sources,
             "tokens_used": tokens_used,
             "status": status,
+
         }
 
     async def manage_vector_db(self, operation: str, data: Dict[str, Any]) -> Dict[str, Any]:
@@ -147,7 +172,7 @@ class ContextMasterAgent:
         Manages operations on the vector database, such as adding, updating, or querying vectors.
 
         Args:
-            operation (str): The operation to perform ('add', 'update', 'query', 'delete').
+            operation (str): The operation to perform ('add_document', 'delete_by_metadata').
             data (Dict[str, Any]): Data relevant to the operation.
 
         Returns:
@@ -156,30 +181,45 @@ class ContextMasterAgent:
         Spravuje operace s vektorovou databází, jako je přidávání, aktualizace nebo dotazování vektorů.
 
         Argumenty:
-            operation (str): Operace, která má být provedena ('add', 'update', 'query', 'delete').
+            operation (str): Operace, která má být provedena ('add_document', 'delete_by_metadata').
             data (Dict[str, Any]): Data relevantní pro operaci.
 
         Vrací:
             Dict[str, Any]: Výsledek operace.
         """
-        self.logger.info(f"Vector DB operation: {operation}")
-        
-        # Placeholder for actual implementation
-        self.logger.info("Vector DB management (placeholder).")
-        
-        # Get the vector store from storage manager
-        vector_store = await self.storage_manager.get_store("postgres_vector")
-        
-        # Simulated operation result
-        return {
-            "operation": operation,
-            "status": "placeholder",
-            "result": None
-        }
+        self.logger.info(f"Vector DB operation: '{operation}'")
+
+        if operation == 'add_document':
+            document_content = data.get("content")
+            metadata = data.get("metadata", {})
+            if not document_content:
+                return {"success": False, "error": "Document content is required for 'add_document' operation."}
+
+            chunks = await self.chunk_document(document_content, metadata)
+            added_count = 0
+            for chunk in chunks:
+                embedding = await self.generate_embedding(chunk["content"])
+                if embedding:
+                    # Use MCP client to add vector to DB, abstracting direct DB access
+                    add_result = await self.mcp_client.handle_request(
+                        tool_name="db.vector_add",
+                        args={
+                            "id": chunk["chunk_id"],
+                            "content": chunk["content"],
+                            "metadata": chunk["metadata"],
+                            "embedding": embedding,
+                        }
+                    )
+                    if add_result.get("success"):
+                        added_count += 1
+            return {"success": True, "message": f"Processed {len(chunks)} chunks, successfully added {added_count} to DB."}
+
+        else:
+            return {"success": False, "error": f"Unsupported vector DB operation: '{operation}'"}
 
     async def chunk_document(self, document: str, metadata: Dict[str, Any]) -> List[Dict[str, Any]]:
         """
-        Chunks a document into smaller pieces for efficient storage and retrieval.
+        Chunks a document into smaller pieces based on token count for efficient storage and retrieval.
 
         Args:
             document (str): The document to chunk.
@@ -188,7 +228,7 @@ class ContextMasterAgent:
         Returns:
             List[Dict[str, Any]]: List of document chunks with their metadata.
 
-        Rozdělí dokument na menší části pro efektivní ukládání a získávání.
+        Rozdělí dokument na menší části podle počtu tokenů pro efektivní ukládání a získávání.
 
         Argumenty:
             document (str): Dokument k rozdělení.
@@ -197,43 +237,59 @@ class ContextMasterAgent:
         Vrací:
             List[Dict[str, Any]]: Seznam částí dokumentu s jejich metadaty.
         """
-        self.logger.info(f"Chunking document: {metadata.get('title', 'Untitled')}")
-        
-        # Placeholder for actual implementation
-        self.logger.info("Document chunking (placeholder).")
-        
-        # Simulated chunking result
-        return [
-            {
-                "chunk_id": "placeholder_chunk_1",
-                "content": "Placeholder chunk content 1",
+        self.logger.info(f"Chunking document from source: {metadata.get('source', 'N/A')}")
+        try:
+            tokenizer = tiktoken.get_encoding("cl100k_base")
+        except Exception:
+            self.logger.warning("cl100k_base not found, falling back to gpt-3.5-turbo tokenizer.")
+            tokenizer = tiktoken.encoding_for_model("gpt-3.5-turbo")
+
+        tokens = tokenizer.encode(document)
+        chunks = []
+
+        for i in range(0, len(tokens), self.chunk_size):
+            chunk_tokens = tokens[i:i + self.chunk_size]
+            chunk_content = tokenizer.decode(chunk_tokens)
+
+            chunk_id = str(uuid.uuid4())
+            chunks.append({
+                "chunk_id": chunk_id,
+                "content": chunk_content,
                 "metadata": metadata,
-                "embedding": None
-            }
-        ]
+                "embedding": None  # To be filled later
+            })
+
+        self.logger.info(f"Document split into {len(chunks)} token-based chunks.")
+        return chunks
 
     async def generate_embedding(self, text: str) -> List[float]:
         """
-        Generates a vector embedding for the given text using an embedding model.
+        Generates a vector embedding for the given text using an embedding model via MCP.
 
         Args:
             text (str): The text to generate an embedding for.
 
         Returns:
-            List[float]: The generated embedding vector.
+            List[float]: The generated embedding vector, or an empty list on failure.
 
-        Generuje vektorový embedding pro zadaný text pomocí embedding modelu.
+        Generuje vektorový embedding pro zadaný text pomocí embedding modelu přes MCP.
 
         Argumenty:
             text (str): Text, pro který se má vygenerovat embedding.
 
         Vrací:
-            List[float]: Vygenerovaný embedding vektor.
+            List[float]: Vygenerovaný embedding vektor, nebo prázdný seznam při selhání.
         """
-        self.logger.info(f"Generating embedding for text (length: {len(text)})")
+        self.logger.debug(f"Requesting embedding for text (length: {len(text)})")
+        # Assume an 'embedding.create' tool is available on the MCP server
+        response = await self.mcp_client.handle_request(
+            tool_name="embedding.create",
+            args={"text": text}
+        )
+        if response and response.get("success"):
+            embedding = response.get("result", {}).get("embedding")
+            if embedding:
+                return embedding
         
-        # Placeholder for actual implementation
-        self.logger.info("Embedding generation (placeholder).")
-        
-        # Simulated embedding result (just zeros for placeholder)
-        return [0.0] * 384  # Typical embedding dimension
+        self.logger.warning(f"Failed to generate embedding for text (length: {len(text)}).")
+        return []

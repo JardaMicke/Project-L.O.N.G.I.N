@@ -13,14 +13,26 @@ try:
 except ModuleNotFoundError:  # pragma: no cover
     websockets = None
 
+import uvicorn
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
+
+
+class MCPRequest(BaseModel):
+    """
+    Pydantic model for validating incoming MCP requests.
+    """
+    tool_name: str
+    args: Dict[str, Any] = {}
+
 
 class MCPServer:
     """
     Micro-Agent Communication Protocol (MCP) Server for Longin AI Systems.
-    Manages dynamic loading of plugins and routing of tool requests.
+    Manages dynamic loading of plugins and routing of tool requests via a FastAPI server.
 
     Server komunikačního protokolu mikro-agentů (MCP) pro systémy Longin AI.
-    Spravuje dynamické načítání pluginů a směrování požadavků na nástroje.
+    Spravuje dynamické načítání pluginů a směrování požadavků na nástroje přes FastAPI server.
     """
 
     def __init__(self, host: str, port: int, plugin_dir: str, logger: logging.Logger):
@@ -47,7 +59,38 @@ class MCPServer:
         self.logger = logger
         self.plugins: Dict[str, Any] = {}  # Stores plugin instances
         self.tools: Dict[str, Any] = {}  # Stores callable tool methods
+
+        
+        self.app = FastAPI(
+            title="Longin MCP Server",
+            description="Micro-Agent Communication Protocol Server",
+            version="0.1.0"
+        )
+        self._server_task: Optional[asyncio.Task] = None
+        self._setup_routes()
+
+    def _setup_routes(self):
+        """Sets up the API routes for the FastAPI application."""
+        
+        @self.app.post("/mcp", summary="Execute an MCP tool")
+        async def mcp_endpoint(request: MCPRequest):
+            """
+            Receives a tool execution request and routes it to the appropriate handler.
+            """
+            result = await self.handle_request(request.tool_name, request.args)
+            if not result.get("success"):
+                raise HTTPException(status_code=400, detail=result.get("error", "Tool execution failed"))
+            return result
+
+        @self.app.get("/tools", summary="List available tools")
+        async def list_tools():
+            """
+            Returns a list of all registered tool names.
+            """
+            return {"tools": list(self.tools.keys())}
+
         self.ws_server: Optional["websockets.server.Serve"] = None  # WebSocket server instance
+
 
     async def load_plugins(self):
         """
@@ -100,12 +143,19 @@ class MCPServer:
 
     async def start(self):
         """
-        Starts the MCP Server, loading plugins and initializing communication channels.
+        Starts the MCP Server, loading plugins and running the FastAPI application with uvicorn.
 
-        Spouští MCP Server, načítá pluginy a inicializuje komunikační kanály.
+        Spouští MCP Server, načítá pluginy a spouští FastAPI aplikaci pomocí uvicorn.
         """
         self.logger.info("Starting MCP Server...")
         await self.load_plugins()
+
+
+        config = uvicorn.Config(self.app, host=self.host, port=self.port, log_level="info")
+        server = uvicorn.Server(config)
+        
+        self._server_task = asyncio.create_task(server.serve())
+        self.logger.info(f"MCP Server (FastAPI) started successfully on http://{self.host}:{self.port}")
 
         # Placeholder for gRPC server startup
         self.logger.info(f"gRPC server starting on {self.host}:{self.port} (placeholder)")
@@ -124,6 +174,7 @@ class MCPServer:
             )
 
         self.logger.info("MCP Server started successfully.")
+
 
     # ------------------------------------------------------------------
     # WebSocket handling
@@ -176,10 +227,14 @@ class MCPServer:
 
         tool_func = self.tools[tool_name]
         try:
-            result = await tool_func(args)  # Assuming tool_func is an async method
+            # Assuming tool_func is an async method/function that accepts a dict of args
+            if asyncio.iscoroutinefunction(tool_func):
+                result = await tool_func(args)
+            else:
+                result = tool_func(args)
             return {"success": True, "result": result}
         except Exception as e:
-            self.logger.error(f"Error executing tool '{tool_name}': {e}")
+            self.logger.error(f"Error executing tool '{tool_name}': {e}", exc_info=True)
             return {"success": False, "error": str(e)}
 
     async def stop(self):
@@ -188,6 +243,19 @@ class MCPServer:
 
         Zastavuje MCP Server a uvolňuje zdroje.
         """
+
+        if self._server_task and not self._server_task.done():
+            self.logger.info("Stopping MCP Server (FastAPI)...")
+            self._server_task.cancel()
+            try:
+                await self._server_task
+            except asyncio.CancelledError:
+                self.logger.info("MCP Server task has been cancelled.")
+            finally:
+                self._server_task = None
+                self.logger.info("MCP Server stopped.")
+        else:
+            self.logger.info("MCP Server is not running.")
         self.logger.info("Stopping MCP Server...")
         # Placeholder for actual server shutdown logic
         self.logger.info("gRPC server shutting down (placeholder)")
