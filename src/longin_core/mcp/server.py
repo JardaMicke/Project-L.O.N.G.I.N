@@ -4,6 +4,14 @@ import importlib
 import os
 from pathlib import Path
 from typing import Dict, Any, Optional
+import json
+
+# Optional dependency – `websockets` is lightweight and pure-python.
+# If it's missing we will log a warning and skip WS startup.
+try:
+    import websockets
+except ModuleNotFoundError:  # pragma: no cover
+    websockets = None
 
 import uvicorn
 from fastapi import FastAPI, HTTPException
@@ -51,6 +59,7 @@ class MCPServer:
         self.logger = logger
         self.plugins: Dict[str, Any] = {}  # Stores plugin instances
         self.tools: Dict[str, Any] = {}  # Stores callable tool methods
+
         
         self.app = FastAPI(
             title="Longin MCP Server",
@@ -79,6 +88,9 @@ class MCPServer:
             Returns a list of all registered tool names.
             """
             return {"tools": list(self.tools.keys())}
+
+        self.ws_server: Optional["websockets.server.Serve"] = None  # WebSocket server instance
+
 
     async def load_plugins(self):
         """
@@ -138,11 +150,55 @@ class MCPServer:
         self.logger.info("Starting MCP Server...")
         await self.load_plugins()
 
+
         config = uvicorn.Config(self.app, host=self.host, port=self.port, log_level="info")
         server = uvicorn.Server(config)
         
         self._server_task = asyncio.create_task(server.serve())
         self.logger.info(f"MCP Server (FastAPI) started successfully on http://{self.host}:{self.port}")
+
+        # Placeholder for gRPC server startup
+        self.logger.info(f"gRPC server starting on {self.host}:{self.port} (placeholder)")
+
+        # Basic WebSocket server startup (JSON RPC-style)
+        if websockets:
+            self.ws_server = await websockets.serve(
+                self._ws_handler,
+                self.host,
+                self.port,
+            )
+            self.logger.info(f"WebSocket server listening on ws://{self.host}:{self.port}")
+        else:
+            self.logger.warning(
+                "websockets library not installed – WebSocket interface disabled."
+            )
+
+        self.logger.info("MCP Server started successfully.")
+
+
+    # ------------------------------------------------------------------
+    # WebSocket handling
+    # ------------------------------------------------------------------
+    async def _ws_handler(self, websocket):  # type: ignore[valid-type]
+        """
+        Minimal JSON-RPC style handler:
+        Expect messages like: {\"tool\": \"file.read\", \"args\": {\"path\": \"README.md\"}}
+        """
+        async for message in websocket:
+            try:
+                request = json.loads(message)
+                tool_name = request.get("tool")
+                args = request.get("args", {}) or {}
+                if not tool_name:
+                    await websocket.send(
+                        json.dumps({"success": False, "error": "Missing 'tool' field"})
+                    )
+                    continue
+                response = await self.handle_request(tool_name, args)
+                await websocket.send(json.dumps(response))
+            except Exception as e:  # noqa: BLE001
+                self.logger.error("WebSocket handler error: %s", e, exc_info=True)
+                await websocket.send(json.dumps({"success": False, "error": str(e)}))
 
     async def handle_request(self, tool_name: str, args: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -187,6 +243,7 @@ class MCPServer:
 
         Zastavuje MCP Server a uvolňuje zdroje.
         """
+
         if self._server_task and not self._server_task.done():
             self.logger.info("Stopping MCP Server (FastAPI)...")
             self._server_task.cancel()
@@ -199,3 +256,18 @@ class MCPServer:
                 self.logger.info("MCP Server stopped.")
         else:
             self.logger.info("MCP Server is not running.")
+        self.logger.info("Stopping MCP Server...")
+        # Placeholder for actual server shutdown logic
+        self.logger.info("gRPC server shutting down (placeholder)")
+
+        # Gracefully shut down WebSocket server if running
+        if self.ws_server:
+            self.logger.info("WebSocket server shutting down...")
+            self.ws_server.close()
+            try:
+                await self.ws_server.wait_closed()
+            except Exception:  # noqa: BLE001
+                pass
+            self.logger.info("WebSocket server shut down.")
+
+        self.logger.info("MCP Server stopped.")

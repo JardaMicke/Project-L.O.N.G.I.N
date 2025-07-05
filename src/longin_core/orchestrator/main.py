@@ -11,6 +11,8 @@ from ..storage import StorageManager
 from ..event_bus import LONGINEventBus
 from ..base import LonginModule
 from ..mcp import MCPServer
+from ..lmstudio.client import AsyncLMStudioClient  # NEW
+from ..agents.mini_agent import MiniAgent          # NEW
 
 
 class CoreOrchestrator:
@@ -57,7 +59,13 @@ class CoreOrchestrator:
         
         # Dictionaries to store registered modules and agents
         self.modules: Dict[str, LonginModule] = {}
-        self.agents: Dict[str, Any] = {}  # Will be replaced with Agent base class later
+        # legacy core agent registry (string-keyed, e.g. "coding_flow_boss")
+        self.agents: Dict[str, Any] = {}
+        # registry for new MiniAgent objects keyed by numeric id
+        self.mini_agents: Dict[int, MiniAgent] = {}
+
+        # LM-Studio client placeholder (lazy-created in start())
+        self.lmstudio_client: Optional[AsyncLMStudioClient] = None
         
         self.logger.info("CoreOrchestrator initialized.")
 
@@ -152,6 +160,58 @@ class CoreOrchestrator:
         self.logger.info(f"Core agents loaded successfully: {list(self.agents.keys())}")
         return True
 
+    # ------------------------------------------------------------------
+    # Mini-agent initialisation & lifecycle
+    # ------------------------------------------------------------------
+    async def _init_mini_agents(self) -> None:
+        """
+        Create/restore MiniAgent instances based on configuration.
+        The config must contain a ``mini_agents`` list, each item having at
+        least ``id``, ``model_path`` and ``dataset_path``.
+        """
+        cfg_agents: List[Dict[str, Any]] = self.config.get("mini_agents", [])
+        if not cfg_agents:
+            self.logger.warning("No mini_agents configuration found.")
+            return
+
+        # Create shared LM-Studio client once
+        if self.lmstudio_client is None:
+            lm_cfg = self.config.get("lmstudio", {})
+            self.lmstudio_client = AsyncLMStudioClient(
+                base_url=lm_cfg.get("host", "http://localhost:1234"),
+                api_key=lm_cfg.get("api_key"),
+            )
+
+        for spec in cfg_agents:
+            try:
+                agent_id: int = spec["id"]
+                # Try to restore previous state
+                try:
+                    agent = MiniAgent.load_state(agent_id)
+                    self.logger.info(f"Loaded MiniAgent state for id={agent_id}")
+                except FileNotFoundError:
+                    agent = MiniAgent(
+                        id=agent_id,
+                        name=spec.get("name", f"agent_{agent_id}"),
+                        model_path=spec["model_path"],
+                        dataset_path=spec["dataset_path"],
+                    )
+                    agent.save_state()
+                    self.logger.info(f"Created new MiniAgent id={agent_id}")
+
+                # Dependency injection
+                agent.lmstudio_client = self.lmstudio_client
+                agent.event_bus = self.event_bus
+
+                # Subscribe to bus events (fire-and-forget)
+                await agent.subscribe_to_events()  # noqa: E501
+
+                self.mini_agents[agent_id] = agent
+            except Exception as exc:
+                self.logger.error(
+                    "Failed to initialise MiniAgent from spec %s : %s", spec, exc, exc_info=True
+                )
+
     async def start(self) -> bool:
         """
         Starts the orchestrator and all its components.
@@ -184,6 +244,10 @@ class CoreOrchestrator:
             # Load core agents
             self.logger.info("Loading core agents...")
             await self.load_core_agents()
+
+            # Initialise mini-agents
+            self.logger.info("Initialising mini_agents...")
+            await self._init_mini_agents()
             
             # Initialize all registered modules
             self.logger.info("Initializing registered modules...")
@@ -236,6 +300,15 @@ class CoreOrchestrator:
             # Shutdown storage
             self.logger.info("Shutting down storage...")
             await self.storage_manager.shutdown_stores()
+
+            # Persist mini-agents & close LM-Studio client
+            for agent in self.mini_agents.values():
+                try:
+                    agent.save_state()
+                except Exception as exc:
+                    self.logger.warning("Failed to save agent %s : %s", agent.id, exc)
+            if self.lmstudio_client:
+                await self.lmstudio_client.close()
             
             self.logger.info("CoreOrchestrator stopped successfully.")
             return True
