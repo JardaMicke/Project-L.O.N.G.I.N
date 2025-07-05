@@ -1,7 +1,11 @@
 import logging
 import asyncio
+import os
+import json
+import uuid
 from typing import Dict, Any, List, Optional
-from ..storage import StorageManager
+
+from ..storage import StorageManager, JsonStore, StorageType
 
 
 class SuccessMonitorRecorderAgent:
@@ -55,10 +59,26 @@ class SuccessMonitorRecorderAgent:
                                  např. popis úkolu, zapojené agenty, změny kódu, výsledky testů atd.
         """
         self.logger.info(f"Recording successful flow: {flow_details.get('task_id', 'N/A')}")
-        # Placeholder for actual storage logic
-        # Example: store = await self.storage_manager.select_store("knowledge_base", "append_only")
-        # if store: await store.set(flow_details.get('task_id'), flow_details)
-        pass
+        # Ensure the flow has a unique identifier
+        task_id: str = flow_details.get("task_id") or str(uuid.uuid4())
+        flow_details["task_id"] = task_id
+
+        # Try to obtain an append-only knowledge-base store
+        store = await self.storage_manager.select_store("knowledge_base", "append_only")
+
+        # Fallback to JSON store if specialised store not configured yet
+        if store is None:
+            store = self.storage_manager.get_store(StorageType.JSON)
+
+        if store is None:
+            self.logger.error("No persistent store available for recording successful flows.")
+            return
+
+        try:
+            await store.set(task_id, flow_details)
+            self.logger.info(f"Successfully recorded flow under id '{task_id}'.")
+        except Exception as e:
+            self.logger.error(f"Failed to record successful flow '{task_id}': {e}", exc_info=True)
 
     async def get_recorded_flows(self, criteria: dict) -> List[dict]:
         """
@@ -79,7 +99,69 @@ class SuccessMonitorRecorderAgent:
             List[dict]: Seznam slovníků, každý reprezentující zaznamenaný úspěšný tok, který odpovídá kritériím.
         """
         self.logger.info(f"Retrieving recorded flows with criteria: {criteria}")
-        # Placeholder for actual retrieval logic
-        # Example: store = await self.storage_manager.select_store("knowledge_base", "read_only")
-        # if store: return await store.query(criteria)
-        return []
+
+        store = await self.storage_manager.select_store("knowledge_base", "read_only")
+        if store is None:
+            store = self.storage_manager.get_store(StorageType.JSON)
+
+        if store is None:
+            self.logger.error("No store available for retrieving successful flows.")
+            return []
+
+        results: List[dict] = []
+
+        # Simple implementation for JsonStore – iterate over files
+        if isinstance(store, JsonStore):
+            base_path = store.base_path  # type: ignore[attr-defined]
+            for fname in os.listdir(base_path):
+                if not fname.endswith(".json"):
+                    continue
+                try:
+                    with open(os.path.join(base_path, fname), "r", encoding="utf-8") as f:
+                        data = json.load(f)
+                    if self._matches_criteria(data, criteria):
+                        results.append(data)
+                except Exception as e:
+                    self.logger.warning(f"Skipping malformed flow file '{fname}': {e}")
+        else:
+            # Generic fallback: attempt to iterate keys if store supports it
+            try:
+                # Expecting the store to implement `list_keys` (not yet in interface)
+                keys = await getattr(store, "list_keys")()  # type: ignore[attr-defined]
+                for k in keys:
+                    data = await store.get(k)
+                    if data and self._matches_criteria(data, criteria):
+                        results.append(data)
+            except AttributeError:
+                self.logger.warning("Store does not support listing keys; criteria filtering skipped.")
+
+        self.logger.info(f"Retrieved {len(results)} flow(s) matching criteria.")
+        return results
+
+    # ------------------------------------------------------------------ #
+    # Helper methods
+    # ------------------------------------------------------------------ #
+
+    @staticmethod
+    def _matches_criteria(item: Dict[str, Any], criteria: Dict[str, Any]) -> bool:
+        """
+        Simple recursive matcher to determine if an item satisfies all criteria.
+        Supports nested dictionary keys using dot-notation.
+        """
+        for key, expected_val in criteria.items():
+            # support dot notation for nested search
+            parts = key.split(".")
+            current_val: Any = item
+            for part in parts:
+                if isinstance(current_val, dict) and part in current_val:
+                    current_val = current_val[part]
+                else:
+                    return False
+
+            # Support callable criteria for advanced filtering
+            if callable(expected_val):
+                if not expected_val(current_val):
+                    return False
+            elif current_val != expected_val:
+                return False
+        return True

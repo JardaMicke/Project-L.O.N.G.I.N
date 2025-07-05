@@ -46,3 +46,13 @@ volumes:
     driver: local
   longin_redis_data:
     driver: local
+
+# Application service -------------------------------------------------
+  app:
+    build: .
+    ports:
+      - "8000:8000"
+    depends_on:
+      - postgres
+      - redis
+    restart: unless-stopped

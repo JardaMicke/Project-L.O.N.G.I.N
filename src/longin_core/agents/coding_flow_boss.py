@@ -37,9 +37,49 @@ class CodingFlowBossAgent:
         self.logger = logger
         self.event_bus = event_bus
         self.mcp_client = mcp_client
-        self.current_task = None
+        # State
+        self.current_task: Optional[str] = None
         self.current_state = "idle"
         self.logger.info("CodingFlowBossAgent initialized.")
+
+        # Topic names – single source of truth
+        self.TOPICS = {
+            "context_request": "context_request",
+            "context_result": "context_result",
+            "test_request": "test_request",
+            "test_result": "test_result",
+            "code_request": "code_request",
+            "code_result": "code_result",
+            "visual_validation_request": "visual_validation_request",
+            "visual_validation_result": "visual_validation_result",
+            "success_monitoring_request": "success_monitoring_request",
+            "success_monitoring_result": "success_monitoring_result",
+        }
+
+        # Register to listen for downstream results
+        asyncio.create_task(self._register_subscriptions())
+
+    async def _register_subscriptions(self) -> None:
+        """Subscribe to result topics so we receive callbacks during the cycle."""
+        await self.event_bus.subscribe(
+            self.TOPICS["context_result"], self.handle_context_result, "coding_flow_boss"
+        )
+        await self.event_bus.subscribe(
+            self.TOPICS["test_result"], self.handle_test_result, "coding_flow_boss"
+        )
+        await self.event_bus.subscribe(
+            self.TOPICS["code_result"], self.handle_code_result, "coding_flow_boss"
+        )
+        await self.event_bus.subscribe(
+            self.TOPICS["visual_validation_result"],
+            self.handle_visual_validation_result,
+            "coding_flow_boss",
+        )
+        await self.event_bus.subscribe(
+            self.TOPICS["success_monitoring_result"],
+            self.handle_success_monitoring_result,
+            "coding_flow_boss",
+        )
 
     async def start_frtdsd_cycle(self, task_description: str):
         """

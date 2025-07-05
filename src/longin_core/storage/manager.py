@@ -5,6 +5,23 @@ from typing import Dict, Any, Optional, List
 import json
 import asyncio
 import os
+# Third-party async libraries (installed via requirements.txt)
+import sys
+
+try:
+    import redis.asyncio as redis  # type: ignore
+except ImportError:  # Graceful degradation – will be logged in connect()
+    redis = None  # pytype: disable=annotation-type-mismatch
+
+try:
+    import asyncpg  # type: ignore
+except ImportError:
+    asyncpg = None
+
+try:
+    import numpy as np  # type: ignore
+except ImportError:
+    np = None
 
 # Define StorageType Enum
 class StorageType(Enum):
@@ -147,34 +164,75 @@ class RedisStore(BaseStore):
     def __init__(self, config: dict, logger: logging.Logger):
         super().__init__(config, logger)
         self.logger.info("RedisStore initialized.")
-        # Placeholder for actual Redis client initialization
+        # Will be initialised in connect()
         self.client = None
 
     async def connect(self) -> bool:
-        self.logger.info("Connecting to Redis (placeholder).")
-        # self.client = await redis.asyncio.from_url(self.config.get("url", "redis://localhost"))
-        return True
+        if redis is None:
+            self.logger.error("redis library not available. Install via `pip install redis`.")
+            return False
+        try:
+            url = self.config.get("url", "redis://localhost:6379/0")
+            self.client = await redis.from_url(url, encoding="utf-8", decode_responses=True)
+            await self.client.ping()
+            self.logger.info(f"Connected to Redis at {url}")
+            return True
+        except Exception as e:
+            self.logger.error(f"Failed to connect to Redis: {e}")
+            return False
 
     async def disconnect(self) -> bool:
-        self.logger.info("Disconnecting from Redis (placeholder).")
-        # if self.client: await self.client.close()
+        if self.client:
+            try:
+                await self.client.close()
+                self.logger.info("Redis connection closed.")
+            except Exception as e:
+                self.logger.warning(f"Error closing Redis connection: {e}")
+                return False
         return True
 
     async def get(self, key: str) -> Optional[Any]:
-        self.logger.info(f"Getting key '{key}' from Redis (placeholder).")
-        return None
+        if not self.client:
+            self.logger.warning("Redis client not connected.")
+            return None
+        data = await self.client.get(key)
+        if data is None:
+            return None
+        try:
+            return json.loads(data)
+        except json.JSONDecodeError:
+            return data
 
     async def set(self, key: str, value: Any, ttl: Optional[int] = None) -> bool:
-        self.logger.info(f"Setting key '{key}' in Redis (placeholder). TTL: {ttl}.")
-        return True
+        if not self.client:
+            self.logger.warning("Redis client not connected.")
+            return False
+        data = json.dumps(value, ensure_ascii=False)
+        try:
+            if ttl:
+                await self.client.set(key, data, ex=ttl)
+            else:
+                await self.client.set(key, data)
+            return True
+        except Exception as e:
+            self.logger.error(f"Redis SET error: {e}")
+            return False
 
     async def delete(self, key: str) -> bool:
-        self.logger.info(f"Deleting key '{key}' from Redis (placeholder).")
-        return True
+        if not self.client:
+            return False
+        deleted = await self.client.delete(key)
+        return bool(deleted)
 
     async def health_check(self) -> bool:
-        self.logger.info("RedisStore health check (placeholder).")
-        return True
+        if not self.client:
+            return False
+        try:
+            pong = await self.client.ping()
+            return pong is True
+        except Exception as e:
+            self.logger.error(f"Redis health check failed: {e}")
+            return False
 
 class PostgresStore(BaseStore):
     """
@@ -184,34 +242,79 @@ class PostgresStore(BaseStore):
     def __init__(self, config: dict, logger: logging.Logger):
         super().__init__(config, logger)
         self.logger.info("PostgresStore initialized.")
-        # Placeholder for actual PostgreSQL client initialization
         self.pool = None
+        self._kv_table = self.config.get("kv_table", "key_value_store")
 
     async def connect(self) -> bool:
-        self.logger.info("Connecting to PostgreSQL (placeholder).")
-        # self.pool = await asyncpg.create_pool(**self.config)
-        return True
+        if asyncpg is None:
+            self.logger.error("asyncpg library not available. Install via `pip install asyncpg`.")
+            return False
+        try:
+            self.pool = await asyncpg.create_pool(**self.config)
+            # ensure key-value table exists
+            async with self.pool.acquire() as conn:
+                await conn.execute(
+                    f\"\"\"CREATE TABLE IF NOT EXISTS {self._kv_table} (
+                        key TEXT PRIMARY KEY,
+                        value JSONB,
+                        expires_at TIMESTAMPTZ
+                    );\"\"\"
+                )
+            self.logger.info("Connected to PostgreSQL and ensured KV table.")
+            return True
+        except Exception as e:
+            self.logger.error(f"Failed to connect to PostgreSQL: {e}")
+            return False
 
     async def disconnect(self) -> bool:
-        self.logger.info("Disconnecting from PostgreSQL (placeholder).")
-        # if self.pool: await self.pool.close()
+        if self.pool:
+            await self.pool.close()
+            self.logger.info("PostgreSQL connection pool closed.")
         return True
 
     async def get(self, key: str) -> Optional[Any]:
-        self.logger.info(f"Getting key '{key}' from Postgres (placeholder).")
-        return None
+        if not self.pool:
+            return None
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow(
+                f"SELECT value FROM {self._kv_table} WHERE key=$1 AND (expires_at IS NULL OR expires_at>NOW())",
+                key,
+            )
+            return row["value"] if row else None
 
     async def set(self, key: str, value: Any, ttl: Optional[int] = None) -> bool:
-        self.logger.info(f"Setting key '{key}' in Postgres (placeholder).")
+        if not self.pool:
+            return False
+        expires_at = "NULL"
+        if ttl:
+            expires_at = f"NOW() + INTERVAL '{ttl} seconds'"
+        async with self.pool.acquire() as conn:
+            await conn.execute(
+                f\"\"\"INSERT INTO {self._kv_table}(key,value,expires_at)
+                       VALUES($1,$2,{expires_at})
+                       ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value, expires_at={expires_at}\"\"\",  # noqa: E501
+                key,
+                json.dumps(value),
+            )
         return True
 
     async def delete(self, key: str) -> bool:
-        self.logger.info(f"Deleting key '{key}' from Postgres (placeholder).")
-        return True
+        if not self.pool:
+            return False
+        async with self.pool.acquire() as conn:
+            result = await conn.execute(f"DELETE FROM {self._kv_table} WHERE key=$1", key)
+        return result.endswith("1")
 
     async def health_check(self) -> bool:
-        self.logger.info("PostgresStore health check (placeholder).")
-        return True
+        if not self.pool:
+            return False
+        try:
+            async with self.pool.acquire() as conn:
+                await conn.execute("SELECT 1;")
+            return True
+        except Exception as e:
+            self.logger.error(f"Postgres health check failed: {e}")
+            return False
 
 class PostgresVectorStore(PostgresStore):
     """
@@ -227,8 +330,25 @@ class PostgresVectorStore(PostgresStore):
         Searches for similar vectors in the database.
         Vyhledává podobné vektory v databázi.
         """
-        self.logger.info(f"Searching for {top_k} similar vectors (placeholder).")
-        return []
+        if not self.pool:
+            self.logger.warning("PostgreSQL pool not initialised for vector search.")
+            return []
+        if np is None:
+            self.logger.error("numpy not installed; cannot perform vector search.")
+            return []
+        try:
+            async with self.pool.acquire() as conn:
+                rows = await conn.fetch(
+                    \"\"\"SELECT id, chunk_id, metadata, content,
+                               embedding <-> $1 AS distance
+                           FROM vector_embeddings
+                           ORDER BY embedding <-> $1
+                           LIMIT $2;\"\"\", vector, top_k
+                )
+            return [dict(r) for r in rows]
+        except Exception as e:
+            self.logger.error(f"Vector similarity search failed: {e}")
+            return []
 
 # StorageManager Class
 class StorageManager:

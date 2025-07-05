@@ -1,0 +1,14 @@
+# Core Dependencies
+redis
+asyncpg
+numpy
+
+# Web Framework
+fastapi
+uvicorn[standard]
+
+# Utilities
+psutil
+python-dotenv
+tiktoken
+requests

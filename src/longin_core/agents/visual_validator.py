@@ -1,6 +1,8 @@
 import logging
 import asyncio
 from typing import Dict, Any, List, Optional
+import os
+from urllib.parse import urlparse, quote_plus
 
 
 class VisualValidatorAgent:
@@ -64,16 +66,68 @@ class VisualValidatorAgent:
         self.logger.info(f"Performing visual validation for URL: {url}")
         self.logger.info(f"Expected elements: {expected_elements}")
 
-        # Placeholder for actual visual validation logic
-        # This would typically involve using a tool like Puppeteer via mcp_client
-        # Example:
-        # screenshot_path = await self.mcp_client.execute("browser.take_screenshot", {"url": url})
-        # diff_result = await self.mcp_client.execute("screenshot.compare", {"base": "expected_image.png", "current": screenshot_path})
+        # 1. Take screenshot of current URL
+        take_response = await self.mcp_client.handle_request(
+            tool_name="browser.take_screenshot",
+            args={"url": url}
+        )
+        if not take_response.get("success"):
+            return {"success": False, "error": f"Failed to take screenshot: {take_response.get('error')}"}
 
-        # Simulated validation result
+        screenshot_path = take_response["result"].get("screenshot_path")
+        if not screenshot_path:
+            return {"success": False, "error": "Screenshot path missing from MCP response."}
+
+        # 2. Determine baseline image (expected) to compare against
+        baseline_dir = self.config.get("baseline_dir", "./baseline_screens")
+        os.makedirs(baseline_dir, exist_ok=True)
+        baseline_filename = f"{self._slugify_url(url)}.png"
+        baseline_path = os.path.join(baseline_dir, baseline_filename)
+
+        if not os.path.exists(baseline_path):
+            # First time run – save current as baseline
+            self.logger.info(f"No baseline found for {url}. Saving current screenshot as baseline.")
+            await self.mcp_client.handle_request(
+                tool_name="file.write",
+                args={"path": baseline_path, "content": ""}  # write empty to create dir entry
+            )
+            # copy via MCP
+            await self.mcp_client.handle_request(
+                tool_name="file.copy",
+                args={"src": screenshot_path, "dst": baseline_path}
+            )
+            return {"success": True, "discrepancies_found": 0,
+                    "details": "Baseline created; no comparison performed.",
+                    "screenshot_diff_url": None}
+
+        # 3. Compare screenshots
+        compare_response = await self.mcp_client.handle_request(
+            tool_name="screenshot.compare",
+            args={"base": baseline_path, "current": screenshot_path}
+        )
+        if not compare_response.get("success"):
+            return {"success": False, "error": f"Comparison failed: {compare_response.get('error')}"}
+
+        diff = compare_response["result"]
+        discrepancies = diff.get("mismatch_count", 0)
+        status = "success" if discrepancies == 0 else "fail"
+
         return {
-            "status": "success",
-            "discrepancies_found": 0,
-            "details": "Visual validation placeholder completed successfully.",
-            "screenshot_diff_url": None,
+            "success": True,
+            "status": status,
+            "discrepancies_found": discrepancies,
+            "screenshot_diff_url": diff.get("diff_path"),
         }
+
+    # --------------------------------------------------------------------- #
+    # Helper methods
+    # --------------------------------------------------------------------- #
+
+    def _slugify_url(self, url: str) -> str:
+        """
+        Converts a URL into a safe filename slug.
+        """
+        parsed = urlparse(url)
+        netloc = parsed.netloc.replace(":", "_")
+        path = quote_plus(parsed.path.strip("/"))
+        return f"{netloc}_{path or 'root'}"

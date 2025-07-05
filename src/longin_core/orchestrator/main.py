@@ -1,7 +1,12 @@
 import logging
 import asyncio
+import inspect
+import pkgutil
+import importlib
+import re
 from typing import Dict, Any, Optional, List
 
+from .. import agents as agents_package
 from ..storage import StorageManager
 from ..event_bus import LONGINEventBus
 from ..base import LonginModule
@@ -56,6 +61,11 @@ class CoreOrchestrator:
         
         self.logger.info("CoreOrchestrator initialized.")
 
+    def _to_snake_case(self, name: str) -> str:
+        """Converts a PascalCase string to snake_case."""
+        s1 = re.sub('(.)([A-Z][a-z]+)', r'\1_\2', name)
+        return re.sub('([a-z0-9])([A-Z])', r'\1_\2', s1).lower()
+
     async def register_module(self, module_instance: LonginModule) -> bool:
         """
         Registers a module instance with the orchestrator.
@@ -85,32 +95,61 @@ class CoreOrchestrator:
 
     async def load_core_agents(self) -> bool:
         """
-        Loads and initializes instances of key agents (CodingFlowBossAgent, ContextMasterAgent, etc.).
-        Registers them in self.agents and connects them to EventBus/MCP server as needed.
+        Dynamically loads and initializes instances of all agents from the 'agents' subpackage.
+        Registers them in self.agents and prepares them for use.
 
         Returns:
             bool: True if all agents were loaded successfully, False otherwise.
 
-        Načte a inicializuje instance klíčových agentů (CodingFlowBossAgent, ContextMasterAgent, atd.).
-        Zaregistruje je do self.agents a propojí je s EventBusem/MCP serverem podle potřeby.
+        Dynamicky načte a inicializuje instance všech agentů z podbalíčku 'agents'.
+        Zaregistruje je do self.agents a připraví je k použití.
 
         Vrací:
             bool: True, pokud byli všichni agenti úspěšně načteni, jinak False.
         """
-        self.logger.info("Loading core agents (placeholder implementation)...")
+        self.logger.info("Dynamically loading core agents...")
         
-        # Placeholder for agent initialization
-        # TODO: Implement actual agent loading logic
-        # Example:
-        # self.agents["coding_flow_boss"] = CodingFlowBossAgent(self.config.get("agents", {}).get("coding_flow_boss", {}), self.logger)
-        # self.agents["context_master"] = ContextMasterAgent(self.config.get("agents", {}).get("context_master", {}), self.logger)
-        
-        # Placeholder for agent connection to EventBus
-        # TODO: Implement actual agent-EventBus connection logic
-        # Example:
-        # await self.event_bus.subscribe("code_request", self.agents["coding_flow_boss"].handle_code_request, "coding_flow_boss")
-        
-        self.logger.info("Core agents loaded successfully (placeholder).")
+        available_dependencies = {
+            "config": self.config,
+            "logger": self.logger,
+            "storage_manager": self.storage_manager,
+            "event_bus": self.event_bus,
+            "mcp_client": self.mcp_server,
+        }
+
+        try:
+            package_path = agents_package.__path__
+            prefix = agents_package.__name__ + "."
+
+            for _, module_name, _ in pkgutil.iter_modules(package_path, prefix):
+                module = importlib.import_module(module_name)
+                
+                for class_name, agent_class in inspect.getmembers(module, inspect.isclass):
+                    if class_name.endswith("Agent") and agent_class.__module__ == module_name:
+                        agent_snake_name = self._to_snake_case(class_name.replace("Agent", ""))
+                        self.logger.info(f"Found agent: {class_name} -> {agent_snake_name}")
+
+                        agent_config = self.config.get("agents", {}).get(agent_snake_name, {})
+                        
+                        constructor_params = inspect.signature(agent_class.__init__).parameters
+                        dependencies_to_inject = {}
+                        
+                        for param_name in constructor_params:
+                            if param_name == 'self':
+                                continue
+                            if param_name == 'config':
+                                dependencies_to_inject[param_name] = agent_config
+                            elif param_name in available_dependencies:
+                                dependencies_to_inject[param_name] = available_dependencies[param_name]
+                        
+                        self.agents[agent_snake_name] = agent_class(**dependencies_to_inject)
+                        self.logger.info(f"Successfully instantiated and registered agent: {class_name}")
+
+        except Exception as e:
+            self.logger.error(f"Failed to dynamically load agents: {e}", exc_info=True)
+            return False
+
+        self.logger.info(f"Core agents loaded successfully: {list(self.agents.keys())}")
         return True
 
     async def start(self) -> bool:
