@@ -1,0 +1,9 @@
+fastapi
+uvicorn[standard]
+pydantic
+psycopg2-binary
+redis
+python-dotenv
+tiktoken
+asyncpg
+websockets

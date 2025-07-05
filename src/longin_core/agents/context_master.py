@@ -63,16 +63,83 @@ class ContextMasterAgent:
         """
         self.logger.info(f"Gathering context for task: {task_description}")
         
-        # Placeholder for actual implementation
-        self.logger.info("Context gathering (placeholder).")
-        
-        # Simulated context result
+        # ------------------------------------------------------------------
+        # 1) Získáme seznam souborů v repozitáři pomocí MCP file.list
+        # ------------------------------------------------------------------
+        try:
+            list_resp = await self.mcp_client.handle_request(
+                "file.list", {"path": self.config.get("repo_root", ".")}
+            )
+            if not list_resp.get("success"):
+                raise RuntimeError(list_resp.get("error", "Unknown MCP error"))
+            file_list: List[str] = list_resp["result"]
+        except Exception as exc:  # noqa: BLE001
+            self.logger.error("Failed to list files via MCP: %s", exc, exc_info=True)
+            return {
+                "task": task_description,
+                "context_chunks": [],
+                "sources": [],
+                "tokens_used": 0,
+                "status": "mcp_error",
+                "error": str(exc),
+            }
+
+        # ------------------------------------------------------------------
+        # 2) Filtrování souborů dle relevance (jednoduše podle výskytu klíčových slov)
+        # ------------------------------------------------------------------
+        keywords = {w.lower() for w in task_description.split() if len(w) > 2}
+        candidate_files = [
+            f
+            for f in file_list
+            if any(kw in f.lower() for kw in keywords)
+            and any(f.endswith(ext) for ext in (".py", ".md", ".txt"))
+        ]
+        # Omezíme počet zpracovaných souborů kvůli výkonu
+        max_files = self.config.get("max_files", 10)
+        candidate_files = candidate_files[:max_files]
+
+        self.logger.info("Context candidate files: %s", candidate_files)
+
+        all_chunks: List[Dict[str, Any]] = []
+        sources: List[str] = []
+        tokens_used = 0
+
+        # ------------------------------------------------------------------
+        # 3) Načteme a chunkujeme obsah každého souboru
+        # ------------------------------------------------------------------
+        for filepath in candidate_files:
+            try:
+                read_resp = await self.mcp_client.handle_request(
+                    "file.read", {"path": filepath}
+                )
+                if not read_resp.get("success"):
+                    self.logger.warning("Cannot read %s: %s", filepath, read_resp.get("error"))
+                    continue
+                content: str = read_resp["result"]
+                file_chunks = await self.chunk_document(
+                    content, {"title": filepath, "path": filepath}
+                )
+                all_chunks.extend(file_chunks)
+                sources.append(filepath)
+
+                # Přibližný počet tokenů (1 znak = ~0.25 tokenu, hrubý odhad)
+                tokens_used += max(1, len(content) // 4)
+
+                # Respektujeme limit kontextového okna
+                if tokens_used >= self.context_window_size:
+                    self.logger.info("Context window limit reached, stopping further reads.")
+                    break
+            except Exception as exc:  # noqa: BLE001
+                self.logger.error("Error while processing %s: %s", filepath, exc, exc_info=True)
+                continue
+
+        status = "ok" if all_chunks else "no_relevant_files"
         return {
             "task": task_description,
-            "context_chunks": [],
-            "sources": [],
-            "tokens_used": 0,
-            "status": "placeholder"
+            "context_chunks": all_chunks,
+            "sources": sources,
+            "tokens_used": tokens_used,
+            "status": status,
         }
 
     async def manage_vector_db(self, operation: str, data: Dict[str, Any]) -> Dict[str, Any]:
